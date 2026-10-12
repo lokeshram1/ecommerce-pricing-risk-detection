@@ -1,103 +1,402 @@
 # E-Commerce Pricing Risk Detection System
 
-A portfolio demo that ranks product listings for human review when observed pricing looks unusual relative to a product category. The score is a prioritization signal, never a finding of fraud.
+An end-to-end machine learning application that identifies potentially unusual e-commerce prices and prioritizes product listings for human investigation.
+
+Built with **Python, XGBoost, Sentence Transformers, PostgreSQL, FastAPI, Streamlit, and Docker**, the system combines pricing analytics, product metadata, and text features to generate explainable pricing-risk scores.
+
+> **Important:** A high risk score is a prioritization signal, not proof of fraud. Every flagged listing requires human review.
+
+## Key Features
+
+- **Pricing anomaly detection:** Identify unusually high or low prices relative to category benchmarks.
+- **Feature engineering:** Combine price deviations, discount signals, product attributes, and semantic text representations.
+- **Machine learning:** Train an XGBoost classifier using a reproducible synthetic-anomaly benchmark.
+- **Explainable scoring:** Display risk scores and supporting evidence to help reviewers investigate flagged listings.
+- **REST API:** Serve predictions and manage products through FastAPI.
+- **Persistent storage:** Store product metadata, scoring history, and reviewer decisions in PostgreSQL.
+- **Interactive dashboard:** Explore pricing risks and investigate suspicious listings with Streamlit.
+- **Reproducible evaluation:** Measure precision, recall, F1, PR-AUC, and the percentage of listings flagged for review.
+- **Containerized deployment:** Run the API, dashboard, and database with Docker Compose.
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Language | Python 3.11+ |
+| Machine learning | XGBoost, scikit-learn |
+| Text features | Sentence Transformers or deterministic hashed text features |
+| Data processing | pandas, NumPy |
+| Database | PostgreSQL, SQLAlchemy |
+| Database migrations | Alembic |
+| Backend | FastAPI, Pydantic |
+| Dashboard | Streamlit, Plotly |
+| Testing | pytest |
+| Deployment | Docker, Docker Compose |
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-  J[Amazon Reviews 2023 metadata JSONL or labeled synthetic sample] --> I[Ingestion and validation]
-  I --> F[Training-only category features and text features]
-  F --> B[Identity split and synthetic anomaly benchmark]
-  B --> M[XGBoost risk model and evaluation]
-  M --> A[FastAPI scoring service]
-  A --> D[(PostgreSQL products, scores, reviews)]
-  A --> S[Streamlit review dashboard]
+flowchart TD
+    A["Amazon Reviews 2023<br/>Electronics Metadata"] --> B["JSONL Ingestion"]
+    B --> C["Data Validation<br/>and Cleaning"]
+    C --> D["Feature Engineering"]
+    D --> E["Category Price Statistics"]
+    D --> F["Product Text Features"]
+    E --> G["XGBoost Model"]
+    F --> G
+    H["Synthetic Anomaly Generator"] --> I["Labeled Benchmark"]
+    I --> G
+    G --> J["Risk Scores and Evidence"]
+    J --> K["FastAPI Scoring Service"]
+    K --> L[("PostgreSQL")]
+    K --> M["Streamlit Dashboard"]
+    M --> N["Human Investigation"]
+    N --> O["Review Decisions"]
+    O --> L
 ```
 
-## Data and limitations
+## Dataset
 
-The intended real source is the Electronics metadata from [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/). This repository does not download it. Fetch an official documented metadata file yourself and pass its local JSONL path to `scripts/ingest.py` / `scripts/train_model.py`. The metadata does not provide verified suspicious-pricing labels, and price coverage/semantics may be incomplete. The included `data/sample/products.jsonl` is entirely synthetic development data, not real product information. The ingestion adapter accepts ASIN, title, category, price, list price, discount, brand, description, features, rating, and rating count; absent fields stay missing. Discount is derived only when list price and observed price support the arithmetic.
+The intended real-world data source is [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/), specifically the Electronics product metadata.
 
-## Feature and benchmark methodology
+This repository does not automatically download the full dataset.
 
-Category median, robust MAD-based scale, and category price ranks are fit using the training partition only. Unseen/small categories fall back to the training global median. Missing-price and missing-attribute indicators, log price, discount, rating fields, and deterministic hashed title/description/features vectors are combined. Hashed vectors are the offline lightweight default. The compatible `sentence-transformers` package is included but model weights are not fetched on startup. To opt into transformer features, set `EMBEDDING_MODE=transformer` and `EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2` while training and serving; the first model use requires network access or a pre-populated local model cache. Artifacts record this configuration. If those embeddings cannot load during inference, scoring falls back to a category rule and labels each response `rule_baseline_embedding_unavailable`.
+The included `data/sample/products.jsonl` file contains **synthetic development data**, not real Amazon product records.
 
-Product identities are split before anomalies are injected. In each split, deterministic seeded injections create elevated prices, unusually low prices, and discount/list-price conflicts while retaining `original_price` and `injection_type`. These labels only measure recovery of the injected patterns. They are not representative labels or estimates of real-world fraud detection performance.
+The ingestion pipeline supports fields such as:
 
-Training fits XGBoost, balances positive class weight, chooses the operating threshold on validation precision, and computes final metrics on a held-out test partition. It compares a category-relative rule with the model. The target 80% recall at 75% precision and roughly 15% review volume is an aspiration, not guaranteed.
+- ASIN or product ID
+- Product title and category
+- Observed price and list price
+- Discount information
+- Brand and product description
+- Product features
+- Rating and rating count
 
-## Quick start
+Missing fields remain missing unless a value can be derived from available information using a documented calculation.
 
-Use Python 3.11 or 3.12. The manifest constrains compatible runtime families (FastAPI/Pydantic 2, SQLAlchemy 2, scikit-learn 1.5, XGBoost 2.1, and supporting packages). For a local environment:
+### Data limitations
+
+Amazon metadata does not provide verified labels for suspicious pricing. Price coverage, category consistency, list-price semantics, and product-variant information may also be incomplete.
+
+Consequently, the project uses synthetic anomaly labels to evaluate controlled experiments. Results from this benchmark should not be interpreted as verified real-world fraud-detection performance.
+
+## Machine Learning Methodology
+
+### 1. Feature engineering
+
+The pipeline builds structured and textual features, including:
+
+- Log-transformed product price
+- Category-relative price deviation
+- Category median and robust MAD-based price statistics
+- Relative price ratios and category price ranks
+- Discount-related features when list-price information is available
+- Product attributes and missing-data indicators
+- Product title, description, and feature text representations
+
+Category statistics are fitted using the training partition only. Unseen or small categories use a training-derived global fallback to reduce data leakage and improve robustness.
+
+### 2. Text representation
+
+The application supports two approaches:
+
+**Offline mode:** Deterministic hashed text features provide a lightweight default for local development.
+
+**Transformer mode:** Sentence Transformer embeddings can be enabled using `sentence-transformers/all-MiniLM-L6-v2`.
+
+Transformer mode may require downloading model weights or configuring a local model cache. Model configuration must remain consistent between training and inference.
+
+### 3. Synthetic anomaly benchmark
+
+Because verified pricing-risk labels are unavailable, the benchmark injects controlled anomalies into product records.
+
+Examples include:
+
+- Prices substantially above category benchmarks
+- Unusually low prices
+- Inconsistent price and list-price relationships
+
+Product identities are split before anomaly injection to reduce leakage between training, validation, and test sets. The model is trained on labeled synthetic examples, and its operating threshold is selected using validation data.
+
+The final evaluation is performed on a held-out test set.
+
+### 4. Model evaluation
+
+The evaluation pipeline reports:
+
+- Precision
+- Recall
+- F1 score
+- Precision-recall AUC
+- Confusion matrix
+- Percentage of listings flagged for review
+- Selected decision threshold
+- Comparison with a category-relative rule-based baseline
+
+The project aims to balance anomaly detection against investigation workload. The actual operating point depends on the data and the benchmark design.
+
+**No performance metrics are claimed until a training run successfully generates and verifies them.** Synthetic benchmark results measure recovery of injected patterns, not confirmed real-world pricing errors.
+
+## Application Components
+
+### FastAPI backend
+
+The REST API provides product retrieval, scoring, risk summaries, evaluation metrics, and review management.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | Check API and database readiness |
+| `GET /products` | Retrieve and filter product listings |
+| `GET /products/{product_id}` | Retrieve product details and score history |
+| `POST /score` | Score and persist a single product |
+| `POST /score/batch` | Score a batch of up to 100 products |
+| `GET /risk/summary` | Retrieve aggregate risk statistics |
+| `GET /metrics` | Retrieve available benchmark metrics |
+| `POST /reviews/{score_id}` | Record a human review decision |
+| `GET /reviews` | Retrieve review history |
+
+Interactive API documentation is available at `/docs`.
+
+Example scoring request:
+
+```bash
+curl -X POST http://localhost:8000/score \
+  -H "Content-Type: application/json" \
+  -d "{\"product\":{\"product_id\":\"demo-1\",\"title\":\"Example headphones\",\"category\":\"Headphones\",\"price\":249.99,\"brand\":\"Example\",\"description\":\"Over-ear wireless headphones\"}}"
+```
+
+### PostgreSQL database
+
+SQLAlchemy models and Alembic migrations manage:
+
+- Product metadata
+- Product scoring history
+- Risk and review flags
+- Human review decisions and timestamps
+
+Review decisions include:
+
+- `Confirmed Anomaly`
+- `Expected Pricing`
+- `Needs More Information`
+
+Reviewer decisions are stored separately from model predictions so that the model's output does not automatically determine the final outcome.
+
+### Streamlit dashboard
+
+The dashboard provides an interface for:
+
+- Reviewing aggregate risk statistics
+- Filtering and sorting flagged products
+- Comparing product prices with category benchmarks
+- Inspecting risk scores and supporting evidence
+- Reviewing historical scores
+- Recording human investigation outcomes
+- Exploring available model evaluation metrics
+
+The dashboard communicates with the FastAPI backend rather than maintaining a separate prediction pipeline.
+
+## Getting Started
+
+### Prerequisites
+
+For local development, install:
+
+- Python 3.11 or 3.12
+- Git
+- PostgreSQL, or Docker Desktop for the database and containerized deployment
+
+### Option 1: Run locally on Windows
+
+Clone the repository:
+
+```powershell
+git clone https://github.com/YOUR-USERNAME/ecommerce-pricing-risk-detection.git
+cd ecommerce-pricing-risk-detection
+```
+
+Create and activate a virtual environment:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+Install the project and test dependencies:
+
+```powershell
 python -m pip install --upgrade pip
 python -m pip install -e ".[test]"
+```
+
+If your PowerShell execution policy prevents environment activation, you can invoke the environment's Python directly using `.venv\Scripts\python.exe`.
+
+Configure environment variables:
+
+```powershell
 Copy-Item .env.example .env
+```
+
+Review `.env` and configure your PostgreSQL connection details. Do not commit this file.
+
+Start PostgreSQL and ensure the configured database exists. If you have Docker Desktop installed, you can start the database service with:
+
+```powershell
 docker compose up -d db
+```
+
+Initialize the demo:
+
+```powershell
 python scripts/init_demo.py
+```
+
+Start the API in one terminal:
+
+```powershell
 uvicorn app.api.main:app --reload
 ```
 
-In a second terminal, `streamlit run dashboard/app.py`. Visit `http://localhost:8501`, API `http://localhost:8000`, and docs `http://localhost:8000/docs`.
+Start the dashboard in a second terminal:
 
-Docker:
-
-```sh
-docker compose up --build
+```powershell
+streamlit run dashboard/app.py
 ```
 
-Then run one-time demo setup in another terminal: `docker compose exec api python scripts/init_demo.py`. Dashboard is `http://localhost:8501`; API is `http://localhost:8000`. Model training is not done during container startup. Compose's demo database credentials are for local development only; set `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` in `.env` before deployment. `DATABASE_URL_DOCKER` is used inside the API container; `DATABASE_URL` is the host-side connection.
+Open the application:
 
-To ingest local Amazon metadata, configure `DATABASE_URL`, then run `python scripts/ingest.py /path/to/electronics.jsonl`; to train: `python scripts/train_model.py --input /path/to/electronics.jsonl`. No credentials or dataset are committed.
+- Dashboard: http://localhost:8501
+- API: http://localhost:8000
+- API documentation: http://localhost:8000/docs
 
-## API
+The initialization workflow is designed to apply database migrations, prepare demo data, train the demo model, and generate scoring results. Model training should be considered successful only if the script completes and the expected artifacts are created.
 
-| Endpoint | Use |
-|---|---|
-| `GET /health` | API/database readiness |
-| `GET /products?limit=50&category=Headphones` | Product listing/filtering |
-| `GET /products/{product_id}` | Product, latest score, score history |
-| `POST /score` | Score and persist one product |
-| `POST /score/batch` | Score up to 100 products |
-| `GET /risk/summary` | Risk counts and review volume |
-| `GET /metrics` | Last held-out benchmark metrics |
-| `POST /reviews/{score_id}` | Record human review outcome |
-| `GET /reviews` | Review history |
+### Option 2: Run with Docker Compose
 
-Example:
+Make sure Docker Desktop is installed and running.
 
-```json
-{"product":{"product_id":"demo-1","title":"Example headphones","category":"Headphones","price":249.99,"brand":"Example","description":"Over-ear wireless headphones","features":["wireless","over-ear"]}}
+Build and start the services:
+
+```bash
+docker compose up --build -d
 ```
 
-Example request: `curl -X POST http://localhost:8000/score -H "Content-Type: application/json" -d '{"product":{"product_id":"demo-1","title":"Example headphones","category":"Headphones","price":249.99,"brand":"Example","description":"Over-ear wireless headphones"}}'`. Batch requests accept 1–100 products. Invalid prices/ratings, empty IDs, malformed bodies, and batches over the limit receive 422. Each score is appended to product scoring history.
+Initialize the demo:
 
-Review decisions are `Confirmed Anomaly`, `Expected Pricing`, and `Needs More Information`; review status is stored separately from prediction.
+```bash
+docker compose exec api python scripts/init_demo.py
+```
 
-## Model performance
+Open:
 
-Run `python scripts/train_model.py` to produce measurements in `models/metrics.json`; the API serves these at `/metrics`. A real execution here has not produced metrics: the available runtime is missing scikit-learn, XGBoost, and joblib, and outbound package installation is blocked. No metrics are claimed. A successful run records precision, recall, F1, PR-AUC, confusion matrix, flagged fraction, threshold, and rule-baseline metrics. All labels and measurements come from synthetic anomaly injections only.
+- Dashboard: http://localhost:8501
+- API: http://localhost:8000
+- API documentation: http://localhost:8000/docs
 
-## Dashboard screenshots
+Check service status:
 
-Start the demo, open the Overview, Risk Explorer, and Model Performance tabs, then capture screenshots with your operating system's screenshot tool. Place portfolio screenshots in a separate documentation asset folder and link them here.
+```bash
+docker compose ps
+docker compose logs api
+docker compose logs dashboard
+```
 
-## Database and migrations
+The bundled Compose credentials are intended for local development only. Configure appropriate credentials, secrets, and access controls before any deployment beyond your own machine.
 
-SQLAlchemy models cover products, scoring history (including the threshold-based review flag), and review history with timestamps, foreign keys, indexes, and unique product identity. `alembic/versions/0001_initial.py` creates the initial schema and `0002_store_flag_decision.py` stores the actual threshold decision. `scripts/init_demo.py` applies all migrations before inserting sample data; for an empty database without the demo, run `alembic upgrade head`. The API health endpoint remains unhealthy until the schema exists. Repeated ingestion merges by product ID; scoring appends history.
+## Training on Real Electronics Metadata
 
-## Tests
+Download an official documented Electronics metadata file separately and store it locally. Do not commit the full dataset to GitHub.
 
-Run `python -m pytest -q`. Tests cover malformed and duplicate ingestion, missing feature handling, reproducible/auditable anomaly injections, disjoint product identity splits, training-only category statistics, model serialization/inference, database merge and history persistence, Alembic migration on clean SQLite, API validation/pagination/reviews, and dashboard empty/outage handling. Tests use SQLite; Compose uses PostgreSQL.
+In your configured Python environment, ingest the data:
+
+```bash
+python scripts/ingest.py /path/to/electronics.jsonl
+```
+
+Train the model and generate evaluation metrics:
+
+```bash
+python scripts/train_model.py --input /path/to/electronics.jsonl
+```
+
+The expected metrics artifact is:
+
+```text
+models/metrics.json
+```
+
+The precise artifact paths and required environment configuration should match the implementation in the repository.
+
+For transformer embeddings, configure the appropriate embedding mode and model before training. Ensure the same feature configuration is used for serving predictions.
+
+## Running Tests
+
+Run the automated tests:
+
+```bash
+python -m pytest -q
+```
+
+The test suite is intended to cover:
+
+- JSONL ingestion and malformed records
+- Missing values and feature calculations
+- Reproducible synthetic anomaly injection
+- Train/test product identity separation
+- Training-only category statistics
+- Model serialization and inference
+- Database persistence and scoring history
+- Database migrations
+- API validation and review workflows
+- Dashboard empty states and API failure handling
+
+Tests should be considered passing only after they execute successfully in the configured environment.
 
 ## Responsible Use
 
-Risk scores identify listings that may deserve closer inspection. They do not establish seller intent, fraud, or policy violations. Human reviewers should consider product variants, bundles, geography, taxes, inventory, timing, and data quality before taking action. Preserve reviewer decisions separately and monitor for category and attribute biases.
+This system identifies listings that may warrant closer inspection. It does not establish seller intent, fraud, or policy violations.
 
-## Design decisions and future work
+A flagged price may be legitimate because of:
 
-The default is a small offline demo: deterministic hashed text features and a category-relative rule fallback until the explicit training command is run. `python scripts/init_demo.py` generates labeled synthetic data, applies the migration, trains XGBoost, saves the model/metrics, and scores the sample. `python scripts/generate_sample.py` regenerates only the sample file. `python scripts/ingest.py PATH` validates and upserts JSONL; `python scripts/train_model.py --input PATH` trains from that file. Production deployment should add auth/rate limiting, observability, retention controls, richer variant-aware comparables, calibration, drift monitoring, reviewer access control, and validated transformer embeddings. Amazon metadata may not contain reliable current prices, list prices, or normalized categories.
+- Product variants or bundles
+- Geographic pricing differences
+- Taxes, shipping, or promotions
+- Inventory changes and timing
+- Incomplete or inaccurate metadata
+
+Human reviewers should evaluate the evidence before taking action. Review outcomes should be retained separately from predictions, and model performance should be monitored across categories and product attributes.
+
+## Limitations and Future Improvements
+
+Potential next steps include:
+
+- Evaluating against independently verified pricing-error labels
+- Building variant-aware price comparisons
+- Improving category normalization
+- Calibrating predicted probabilities
+- Monitoring data and model drift
+- Adding authentication and reviewer access controls
+- Implementing rate limiting and structured observability
+- Establishing retention policies for stored product and review data
+- Comparing transformer embeddings against simpler text baselines
+
+## Screenshots
+
+Add screenshots of the dashboard to a documentation assets directory once the application has been launched successfully.
+
+Recommended screenshots:
+
+1. Overview — aggregate risk statistics and distribution
+2. Risk Explorer — searchable product risk table
+3. Investigation Details — category comparison and supporting evidence
+4. Model Performance — actual benchmark metrics and baseline comparison
+
+## Project Status
+
+This repository is intended as a reproducible portfolio demonstration of an end-to-end ML application.
+
+The architecture, synthetic-data workflow, scoring API, database integration, and dashboard are designed to work together. Actual model performance and deployment readiness must be established by running the training pipeline, automated tests, and application services in a properly configured environment.
+
+**Built to demonstrate:** Machine learning, feature engineering, data pipelines, backend APIs, relational databases, model evaluation, and human-in-the-loop decision support.
+

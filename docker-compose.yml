@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pricing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pricing}
+      POSTGRES_DB: ${POSTGRES_DB:-pricing_risk}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  api:
+    build: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql+psycopg://pricing:pricing@db:5432/pricing_risk}
+      MODEL_DIR: /srv/models
+      EMBEDDING_MODE: lightweight
+    volumes: ["./models:/srv/models"]
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD","python","-c","import urllib.request; urllib.request.urlopen('http://localhost:8000/health',timeout=3)"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+    ports: ["8000:8000"]
+  dashboard:
+    build: {context: ., dockerfile: Dockerfile.dashboard}
+    environment: {API_URL: http://api:8000}
+    depends_on:
+      api: {condition: service_healthy}
+    ports: ["8501:8501"]
+volumes:
+  pgdata:

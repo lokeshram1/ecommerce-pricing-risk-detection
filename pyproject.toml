@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69,<76"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecommerce-pricing-risk-monitor"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "fastapi>=0.115,<0.116", "uvicorn[standard]>=0.32,<0.33",
+  "pydantic>=2.9,<3", "pydantic-settings>=2.6,<3",
+  "sqlalchemy>=2.0.36,<2.1", "alembic>=1.14,<2", "psycopg[binary]>=3.2,<4",
+  "pandas>=2.2,<2.3", "numpy>=1.26,<2", "scikit-learn>=1.5,<1.6",
+  "xgboost>=2.1,<2.2", "sentence-transformers>=3.3,<4", "transformers>=4.46,<4.50", "joblib>=1.4,<2",
+  "streamlit>=1.41,<1.42", "plotly>=5.24,<6", "requests>=2.32,<3"
+]
+[project.optional-dependencies]
+test = ["pytest>=8.3,<9", "httpx>=0.28,<0.29"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+[tool.setuptools.packages.find]
+include = ["app*", "dashboard*", "scripts*"]
+exclude = ["tests*", "alembic*"]
